@@ -121,9 +121,8 @@ export class AiGatewayConfig {
           config: {
             provider: provider as AiModelConfig["provider"],
             model: modelId,
-            // apiToken and apiUrl are ignored when AI Gateway mode is active -- getModel()
-            // reads the real values from env. We set them to empty strings here to satisfy
-            // the type.
+            // No credentials of its own: getModel() routes a credential-less config through the
+            // platform gateway, reading the real transport values from env.
             apiToken: "",
           },
         };
@@ -143,6 +142,17 @@ export class AiGatewayConfig {
       apiToken: "",
     };
   }
+}
+
+/**
+ * Whether a model config carries credentials of its own: an API token, or an API URL (an Ollama or
+ * other compatible server that needs no key). Such a model is one a user registered with their own
+ * provider account, so it keeps using that account even when the deployment runs an AI Gateway;
+ * only credential-less configs -- the deployment's built-in catalog and quick model -- ride the
+ * platform gateway and draw on its budget.
+ */
+export function hasOwnCredentials(config: AiModelConfig): boolean {
+  return Boolean(config.apiToken?.trim() || config.apiUrl?.trim());
 }
 
 /**

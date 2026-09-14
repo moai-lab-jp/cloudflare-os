@@ -17,7 +17,7 @@ import { LanguageModelBinding } from "./ai-model-binding";
 import AI_MODEL_BINDING_TYPES from "./ai-model-binding.txt";
 import { AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, WORKERS_AI_OUTPUT_LIMIT }
   from "@gadgets/workshop-shared/api";
-import { AiGatewayConfig, getAiGatewayConfig, type AiGatewayLogRoute } from "./ai-gateway.js";
+import { AiGatewayConfig, getAiGatewayConfig, hasOwnCredentials, type AiGatewayLogRoute } from "./ai-gateway.js";
 import { completeText } from "./ai-invoke.js";
 import { bridgePdfAttachments } from "./chat-attachment-pdf.js";
 
@@ -365,10 +365,11 @@ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
         options.sessionAffinity);
   }
 
-  // Otherwise: when a platform AI Gateway is configured, route through it (platform-funded free
-  // tier). The config's apiToken/apiUrl are ignored in that mode.
+  // Otherwise: when a platform AI Gateway is configured, route the deployment's own models through
+  // it (platform-funded). A model registered with its own token or URL keeps using those, so users
+  // can still bring their own providers alongside the built-in catalog.
   let gwConfig = getAiGatewayConfig(env);
-  if (gwConfig) {
+  if (gwConfig && !hasOwnCredentials(config)) {
     return getModelViaGateway(gwConfig, config, initiator, options);
   }
 

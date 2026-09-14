@@ -60,16 +60,15 @@ function decodeSelection(value: string): SelectionType {
   return { type: 'suggested', provider, modelId, displayName }
 }
 
-// Build the flat list of options for the Select dropdown.
-function buildOptions(gatewayMode: boolean, enabledProviders: Set<string> | null) {
+// Build the flat list of options for the Select dropdown. Every provider is offered, since a model
+// added here runs on the user's own credentials; `builtInProviders` (AI Gateway mode) names the
+// providers whose suggested models the deployment already provides, so those aren't listed again.
+function buildOptions(builtInProviders: Set<string> | null) {
   const options: { value: string; label: string; provider: string }[] = []
   const providerOrder = Object.keys(SUGGESTED_MODELS) as AiModelProvider[]
 
   for (const provider of providerOrder) {
-    if (enabledProviders && !enabledProviders.has(provider)) continue
-
-    // In gateway mode, suggested models are already built-in, so don't list them.
-    if (!gatewayMode) {
+    if (!builtInProviders?.has(provider)) {
       for (const [modelId, model] of Object.entries(SUGGESTED_MODELS[provider])) {
         options.push({
           value: encodeSelection(provider, modelId),
@@ -110,7 +109,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const gatewayMode = aiConfig?.enabled === true
-  const enabledProviders: Set<string> | null = gatewayMode
+  const builtInProviders: Set<string> | null = gatewayMode
     ? new Set(aiConfig.enabledProviders)
     : null
 
@@ -151,7 +150,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
     const newErrors: Record<string, string> = {}
 
     if (!selection) {
-      newErrors.selection = gatewayMode ? 'Please select a provider' : 'Please select a model'
+      newErrors.selection = 'Please select a model'
     }
 
     if (selection?.type === 'custom') {
@@ -161,17 +160,16 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
 
     const isOllama = selection?.provider === 'ollama'
     const isCloudflare = selection?.provider === 'cloudflare'
-    const showCredentials = !gatewayMode
 
-    if (showCredentials && selection && !isOllama && !apiToken.trim()) {
+    if (selection && !isOllama && !apiToken.trim()) {
       newErrors.apiToken = 'Please enter your API token'
     }
 
-    if (showCredentials && isCloudflare && !accountId.trim()) {
+    if (isCloudflare && !accountId.trim()) {
       newErrors.accountId = 'Please enter your Cloudflare account ID'
     }
 
-    if (showCredentials && isOllama && !apiUrl.trim()) {
+    if (isOllama && !apiUrl.trim()) {
       newErrors.apiUrl = 'Please enter the Ollama API URL'
     }
 
@@ -197,9 +195,9 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
       const config: AiModelConfig = {
         provider: selection!.provider,
         model: finalModelId,
-        apiToken: gatewayMode ? '' : apiToken.trim(),
-        ...(!gatewayMode && accountId.trim() && { accountId: accountId.trim() }),
-        ...(!gatewayMode && apiUrl.trim() && { apiUrl: apiUrl.trim() }),
+        apiToken: apiToken.trim(),
+        ...(accountId.trim() && { accountId: accountId.trim() }),
+        ...(apiUrl.trim() && { apiUrl: apiUrl.trim() }),
       }
 
       await authenticatedApi.addModel(profile, config)
@@ -213,12 +211,11 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
     }
   }
 
-  const options = buildOptions(gatewayMode, enabledProviders)
+  const options = buildOptions(builtInProviders)
   const showCustomFields = selection?.type === 'custom'
   const example = selection ? exampleModel(selection.provider) : null
   const isOllama = selection?.provider === 'ollama'
   const isCloudflare = selection?.provider === 'cloudflare'
-  const showCredentials = !gatewayMode
 
   // Group options by provider for rendering with visual separators.
   const groupedOptions: { provider: string; items: typeof options }[] = []
@@ -241,9 +238,9 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
         <div className="space-y-4">
           {/* Model / Provider selection */}
           <Select
-            label={gatewayMode ? 'Select Provider' : 'Select Model'}
+            label="Select Model"
             className="w-full text-sm"
-            placeholder={gatewayMode ? 'Choose a provider...' : 'Choose an AI model...'}
+            placeholder="Choose an AI model..."
             value={selectValue}
             onValueChange={(v) => handleModelSelect(v as string)}
             error={errors.selection}
@@ -295,7 +292,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
           )}
 
           {/* Cloudflare account ID (the Workers AI REST endpoint is account-scoped) */}
-          {showCredentials && isCloudflare && (
+          {isCloudflare && (
             <Input
               label="Cloudflare Account ID"
               placeholder="e.g., 0123456789abcdef0123456789abcdef"
@@ -308,7 +305,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
           )}
 
           {/* API Token */}
-          {showCredentials && selection && (
+          {selection && (
             <SensitiveInput
               label="API Token"
               placeholder={API_TOKEN_PLACEHOLDERS[selection.provider]}
@@ -327,7 +324,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
           )}
 
           {/* Ollama API URL (always visible for Ollama) */}
-          {showCredentials && isOllama && (
+          {isOllama && (
             <Input
               label="API URL"
               placeholder="http://localhost:11434"
@@ -340,7 +337,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
           )}
 
           {/* Advanced Settings for non-Ollama, non-Cloudflare providers */}
-          {showCredentials && selection && !isOllama && !isCloudflare && (
+          {selection && !isOllama && !isCloudflare && (
             <Collapsible.Root
               open={advancedOpen}
               onOpenChange={setAdvancedOpen}

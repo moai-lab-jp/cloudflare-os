@@ -6,7 +6,7 @@ import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-ga
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { createTypedStorage, collection } from "@gadgets/typed-storage";
 import { createWorkshopLogger } from "./observability";
-import { getAiGatewayConfig } from "./ai-gateway.js";
+import { getAiGatewayConfig, hasOwnCredentials } from "./ai-gateway.js";
 import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
 import type { AdminSettings } from "./admin-settings.js";
 import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archive.js";
@@ -548,9 +548,13 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async addModel(profile: AiChatAuthorInfo, config: AiModelConfig): Promise<void> {
+    // A model added by a user runs on their own provider account. Without credentials it would ride
+    // the platform gateway, letting anyone spend the deployment's budget on models it doesn't offer.
     let gwConfig = getAiGatewayConfig(this.env);
-    if (gwConfig && !gwConfig.providers.has(config.provider)) {
-      throw new Error(`Provider "${config.provider}" is not available in AI Gateway mode.`);
+    if (gwConfig && !hasOwnCredentials(config)) {
+      throw new Error(
+          "A custom model needs its own API token (or API URL). The built-in models are already " +
+          "available without one.");
     }
 
     profile.type = "agent";
