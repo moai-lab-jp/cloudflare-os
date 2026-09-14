@@ -16,7 +16,7 @@ import {
 import { chatKey, chatKeyPrefix } from "./storage-schema/overseer-storage.js";
 import { recordAnalytics } from "./analytics";
 import { createWorkshopLogger } from "./observability";
-import { getGatewayModels, type GatewayModels } from "./ai-gateway.js";
+import { getGatewayModels, hasOwnCredentials, type GatewayModels } from "./ai-gateway.js";
 import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
 import { isCloudflareLimitsEnabled } from "./ai-gateway-billing/config.js";
 import type { AdminSettings } from "./admin-settings.js";
@@ -1336,8 +1336,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
     // Also include user-configured models, where users may add their own, skipping any that a
     // gateway model shadows, whatever its mode (see #resolveModel()).
-    if (models && !models.userModels) return result;
+    // A model with its own credentials runs outside the gateway, so it stays even when the admin
+    // keeps users from adding gateway models.
     for (let model of this.storage.aiModels.list()) {
+      if (models && !models.userModels && !hasOwnCredentials(model.config)) continue;
       if (!models?.get(model.profile.id) &&
           modelKind(model.config.provider, model.config.model) === kind) {
         result.push(model.profile);
@@ -1349,7 +1351,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   async addModel(profile: AiChatAuthorInfo, config: RedactedAiModelConfig,
                  copySecretsFrom?: string): Promise<void> {
     let models = await getGatewayModels(this.env);
-    models?.refuseUserModel();
+    // With its own token or URL the model runs on the user's provider account, outside the
+    // gateway, so the admin's switch for gateway-run user models doesn't apply to it. Otherwise
+    // the refusal comes first, whatever else is wrong with the request.
+    if (!this.#runsOnOwnCredentials(config, copySecretsFrom)) models?.refuseUserModel();
     let source: AiModelConfig | undefined;
     if (copySecretsFrom !== undefined) {
       source = this.#getHandAddedModel(copySecretsFrom, models).config;
@@ -1368,12 +1373,23 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   async updateModel(profile: AiChatAuthorInfo, config: RedactedAiModelConfig): Promise<void> {
     let models = await getGatewayModels(this.env);
-    models?.refuseUserModel();
+    if (!this.#runsOnOwnCredentials(config, profile.id)) models?.refuseUserModel();
     let stored = this.#getHandAddedModel(profile.id, models).config;
     if (config.provider !== stored.provider || config.model !== stored.model) {
       throw new Error("A model's provider and model ID can't be changed.");
     }
     this.#putModel(profile, resolveWithheldSecrets(config, stored), models);
+  }
+
+  /**
+   * Whether a model request runs on credentials of its own (hasOwnCredentials): a token or URL it
+   * carries, or the token it withholds and so keeps from the stored model `from`. Reads without
+   * throwing, so a refusal can come before the request's other checks.
+   */
+  #runsOnOwnCredentials(config: RedactedAiModelConfig, from: string | undefined): boolean {
+    let token = config.apiToken ??
+        (from === undefined ? undefined : this.storage.aiModels.get(from)?.config.apiToken);
+    return hasOwnCredentials({ ...config, apiToken: token ?? "" } as AiModelConfig);
   }
 
   /** The stored record of a model the user added, throwing for AI Gateway models. */
@@ -1387,7 +1403,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   #putModel(profile: AiChatAuthorInfo, config: AiModelConfig, models: GatewayModels | null) {
-    if (models && !models.addableProviders.includes(config.provider)) {
+    if (models && !hasOwnCredentials(config) && !models.addableProviders.includes(config.provider)) {
       throw new Error(`Provider "${config.provider}" is not available in AI Gateway mode.`);
     }
     if (config.provider === "cloudflare-auto-router") {
@@ -1588,12 +1604,16 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   /**
    * Resolve a model ID the way chats do: a gateway model shadows a stored model with the same ID
-   * whatever its mode, so a disabled one resolves to nothing rather than to the stored model. No
-   * stored model resolves on a gateway deployment whose users may not add their own.
+   * whatever its mode, so a disabled one resolves to nothing rather than to the stored model. On a
+   * gateway deployment whose users may not add their own, only a stored model with its own
+   * credentials resolves (it runs outside the gateway).
    */
   #resolveModel(id: string, models: GatewayModels | null): UserAiModelRecord | undefined {
     if (models?.get(id)) return models.resolve(id);
-    return models && !models.userModels ? undefined : this.storage.aiModels.get(id);
+    let stored = this.storage.aiModels.get(id);
+    // A model with its own credentials still runs when the admin disables gateway-run user models.
+    if (models && !models.userModels && !(stored && hasOwnCredentials(stored.config))) return undefined;
+    return stored;
   }
 
   async listWorkspaces(): Promise<WorkspaceMetadataWithTimestamps[]> {

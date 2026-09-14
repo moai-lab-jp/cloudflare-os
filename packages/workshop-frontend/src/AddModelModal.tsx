@@ -143,10 +143,13 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
   // Advanced settings collapsible state
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
-  const gatewayMode = aiConfig?.enabled === true
-  const enabledProviders: Set<string> | null = gatewayMode
-    ? new Set(aiConfig.enabledProviders)
-    : null
+  // A model added here runs on the user's own credentials and goes straight to its provider, even
+  // when the deployment runs an AI Gateway (hasOwnCredentials in the backend's ai-gateway.ts). So the
+  // dialog works as it does without a gateway: every provider, with credentials. The gateway's own
+  // models are in the model picker already; `deploymentGateway` only adds a note saying so.
+  const deploymentGateway = aiConfig?.enabled === true
+  const gatewayMode = false
+  const enabledProviders: Set<string> | null = null
 
   // The server keeps withheld secrets only for the endpoint they were configured for. Once the URL
   // changes, withheld values are shown (and sent) as blank, and header values must be re-entered.
@@ -366,6 +369,13 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
               </div>
             ))}
           </Select>
+          )}
+
+          {deploymentGateway && !source && (
+            <p className="m-0 text-xs text-kumo-subtle">
+              The deployment's built-in models are already available. A model you add here uses your
+              own API key and goes straight to its provider.
+            </p>
           )}
 
           {/* Custom model fields */}

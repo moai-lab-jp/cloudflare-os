@@ -21,6 +21,10 @@ const CONFIG: AiModelConfig = {
   apiUrl: "https://proxy.example/v1",
   extraHeaders: { "X-Proxy-Key": "proxy-secret", "X-Empty": "" },
 };
+// A gateway-run user model: no credentials of its own, so it rides the deployment's AI Gateway, and
+// the gateway's providers and the admin's userModelsEnabled switch govern it. A model with its own
+// token or URL (CONFIG) runs on the user's provider account instead (hasOwnCredentials).
+const GATEWAY_CONFIG: AiModelConfig = { provider: "openai", model: "my-model", apiToken: "" };
 
 type ModelMethods = Pick<UserDurableObject, "addModel" | "getModelConfig" | "updateModel">;
 
@@ -286,7 +290,8 @@ describe("UserDurableObject gateway model modes", () => {
 
     it("refuses a model under a provider that neither the environment nor an admin enables",
         () => inGatewayUser(async user => {
-      await expect(user.addModel(PROFILE, CONFIG)).rejects.toThrow(providerUnavailable("openai"));
+      await expect(user.addModel(PROFILE, GATEWAY_CONFIG))
+          .rejects.toThrow(providerUnavailable("openai"));
       expect(storedModel(user, PROFILE.id)).toBeUndefined();
       // An admin's listing of a provider AI Gateway does not serve enables nothing.
       const ollama = { provider: "ollama" as const, model: "llama", apiToken: "" };
@@ -302,16 +307,26 @@ describe("UserDurableObject gateway model modes", () => {
     it("keeps a model whose provider an admin turned off again", () => {
       const admin: Partial<AdminConfig> = { addedProviders: ["openai"] };
       return inGatewayUser(async user => {
-        await user.addModel(PROFILE, CONFIG);
+        await user.addModel(PROFILE, GATEWAY_CONFIG);
         admin.addedProviders = [];
         expect(await listedIds(user)).toContain(PROFILE.id);
-        expect((await user.getChatContext(PROFILE.id)).aiModel?.config).toEqual(CONFIG);
-        await expect(user.updateModel({ ...PROFILE, name: "Renamed" }, CONFIG))
+        expect((await user.getChatContext(PROFILE.id)).aiModel?.config).toEqual(GATEWAY_CONFIG);
+        await expect(user.updateModel({ ...PROFILE, name: "Renamed" }, GATEWAY_CONFIG))
             .rejects.toThrow(providerUnavailable("openai"));
-        await expect(user.addModel(OTHER, OTHER_CONFIG))
+        await expect(user.addModel(OTHER, { ...GATEWAY_CONFIG, model: "other" }))
             .rejects.toThrow(providerUnavailable("openai"));
       }, admin);
     });
+
+    // It runs on the user's own provider account, outside the gateway (hasOwnCredentials).
+    it("accepts a model with its own credentials under any provider", () => inGatewayUser(async user => {
+      await user.addModel(PROFILE, CONFIG);
+      await user.addModel(OTHER, OTHER_CONFIG);
+      expect(await listedIds(user)).toEqual(expect.arrayContaining([PROFILE.id, OTHER.id]));
+      expect((await user.getChatContext(PROFILE.id)).aiModel?.config).toEqual(CONFIG);
+      await user.updateModel({ ...PROFILE, name: "Renamed" }, CONFIG);
+      expect(storedModel(user, PROFILE.id)).toMatchObject({ profile: { name: "Renamed" } });
+    }));
   });
 
   it("stops listing a model the admin hid, which still resolves", () => inGatewayUser(async user => {
@@ -383,7 +398,7 @@ describe("UserDurableObject gateway model modes", () => {
 
   describe("once users may not add their own models", () => {
     const MINE = { ...PROFILE, id: "mine", name: "Mine" };
-    const MINE_CONFIG: AiModelConfig = { ...CONFIG, provider: "anthropic", model: "mine" };
+    const MINE_CONFIG: AiModelConfig = { ...GATEWAY_CONFIG, provider: "anthropic", model: "mine" };
     const ADDING_REFUSED =
         "Adding your own models is disabled on this deployment by an administrator.";
     const MINE_REFUSED = 'The "Mine" model can\'t be used: adding your own models is disabled ' +
@@ -469,6 +484,20 @@ describe("UserDurableObject gateway model modes", () => {
       expect((await user.getExternalMessageChatContext(null)).aiModel?.profile).toEqual(MINE);
       await user.updateModel({ ...MINE, name: "Renamed" }, MINE_CONFIG);
       expect(storedModel(user, MINE.id)).toMatchObject({ profile: { name: "Renamed" } });
+    }));
+
+    // A model with its own credentials runs outside the gateway, so the switch doesn't reach it.
+    it("keeps a model with its own credentials, and lets users add and edit one",
+        () => withStoredModel(async (user, _, offered) => {
+      const OWN = { ...MINE, id: "own", name: "Own" };
+      const OWN_CONFIG: AiModelConfig = { ...CONFIG, provider: "anthropic", model: "own" };
+      await user.addModel(OWN, OWN_CONFIG);
+      expect(await listedIds(user)).toEqual([...offered, OWN.id]);
+      expect((await user.getChatContext(OWN.id)).aiModel).toEqual({ profile: OWN, config: OWN_CONFIG });
+      await user.updateModel({ ...OWN, name: "Renamed" }, OWN_CONFIG);
+      expect(storedModel(user, OWN.id)).toMatchObject({ profile: { name: "Renamed" } });
+      // The credential-less one stays refused.
+      await expect(user.getChatContext(MINE.id)).rejects.toThrow(new Error(MINE_REFUSED));
     }));
 
     it("leaves the gateway's models as they are",
