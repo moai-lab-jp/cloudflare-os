@@ -34,16 +34,18 @@ const GADGET_INITIATOR: AiChatAuthorInfo = {
   name: "Report Gadget",
 };
 
+// The deployment's own models carry no credentials: in gateway mode that is what sends them through
+// the platform gateway (a model with its own token or URL goes to its provider directly).
 const ANTHROPIC_CONFIG: AiModelConfig = {
   provider: "anthropic",
   model: "claude-sonnet-4-5",
-  apiToken: "ignored-in-gateway-mode",
+  apiToken: "",
 };
 
 const WORKERS_AI_CONFIG: AiModelConfig = {
   provider: "cloudflare",
   model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  apiToken: "ignored-in-gateway-mode",
+  apiToken: "",
 };
 
 function env(overrides: Partial<Cloudflare.Env> = {}): Cloudflare.Env {
@@ -132,7 +134,7 @@ describe("getModel AI Gateway routing", () => {
     const handle = getModel(env(), {
       provider: "google",
       model: "gemini-2.5-flash",
-      apiToken: "ignored-in-gateway-mode",
+      apiToken: "",
     }, INITIATOR);
 
     expect(handle.model.api).toBe("google-generative-ai");
@@ -257,6 +259,57 @@ describe("getModel AI Gateway routing", () => {
     expect(() => getModel(env({ CF_AI_GATEWAY_PROVIDERS: "anthropic,ollama" }),
         { provider: "ollama", model: "llama3", apiToken: "" }, INITIATOR))
         .toThrow(new Error('Provider "ollama" is not supported through AI Gateway.'));
+  });
+});
+
+describe("getModel with a user's own credentials in AI Gateway mode", () => {
+  beforeEach(() => {
+    capturedRequests.length = 0;
+  });
+
+  it("sends a model registered with its own API token to its provider, not the platform gateway", async () => {
+    const handle = getModel(env(), { ...ANTHROPIC_CONFIG, apiToken: "user-api-key" }, INITIATOR, {
+      metadata: { source: "chat", chatId: 7 },
+    });
+
+    expect(handle.model.baseUrl).toBe("https://api.anthropic.com");
+    expect(handle.aiGatewayLogRoute).toBeUndefined();
+
+    const request = await captureRequest(handle);
+    expect(urlWithoutQuery(request.url)).toBe("https://api.anthropic.com/v1/messages");
+    expect(request.headers.get("x-api-key")).toBe("user-api-key");
+    expect(request.headers.get("cf-aig-authorization")).toBeNull();
+    expect(request.headers.get("cf-aig-metadata")).toBeNull();
+  }, 15000);
+
+  it("honours a registered model's own API URL, such as an OpenAI-compatible proxy", async () => {
+    const handle = getModel(env(), {
+      provider: "openai",
+      model: "my-proxy-model",
+      apiToken: "proxy-key",
+      apiUrl: "https://llm.example.com/v1",
+    }, INITIATOR);
+
+    expect(handle.model.baseUrl).toBe("https://llm.example.com/v1");
+    expect(handle.aiGatewayLogRoute).toBeUndefined();
+  });
+
+  it("keeps a key-less Ollama model on its own server", () => {
+    const handle = getModel(env(), {
+      provider: "ollama",
+      model: "qwen3:8b",
+      apiToken: "",
+      apiUrl: "http://my-ollama:11434",
+    }, INITIATOR);
+
+    expect(handle.model.baseUrl).toBe("http://my-ollama:11434/v1");
+    expect(handle.aiGatewayLogRoute).toBeUndefined();
+  });
+
+  it("still routes a credential-less config through the platform gateway", () => {
+    const handle = getModel(env(), { ...ANTHROPIC_CONFIG, apiToken: "  " }, INITIATOR);
+    expect(handle.model.baseUrl).toBe(
+        "https://gateway.ai.cloudflare.com/v1/gateway-account-id/platform-gateway/anthropic");
   });
 });
 
@@ -396,7 +449,7 @@ describe("getModel AI Gateway binding transport", () => {
     const googleHandle = getModel(hybridEnv, {
       provider: "google",
       model: "gemini-2.5-flash",
-      apiToken: "ignored-in-gateway-mode",
+      apiToken: "",
     }, INITIATOR);
     expect(googleHandle.model.baseUrl).toBe(
         "https://gateway.ai.cloudflare.com/v1/gateway-account-id/platform-gateway/" +
@@ -422,7 +475,7 @@ describe("getModel AI Gateway binding transport", () => {
     expect(() => getModel(bindingEnv(), {
       provider: "google",
       model: "gemini-2.5-flash",
-      apiToken: "ignored-in-gateway-mode",
+      apiToken: "",
     }, INITIATOR)).toThrow(
         'Provider "google" cannot use the Workers AI binding transport');
   });

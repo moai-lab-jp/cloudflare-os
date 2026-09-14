@@ -33,7 +33,7 @@ import {
 } from "@gadgets/workshop-shared/api";
 import { traceChat } from "./agent-tracing.js";
 import {
-  AiGatewayConfig, getAiGatewayConfig, getGatewayModels, type AiGatewayLogRoute,
+  AiGatewayConfig, getAiGatewayConfig, getGatewayModels, hasOwnCredentials, type AiGatewayLogRoute,
 } from "./ai-gateway.js";
 import { completeText } from "./ai-invoke.js";
 import { bridgePdfAttachments } from "./chat-attachment-pdf.js";
@@ -608,10 +608,11 @@ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
         options.sessionAffinity);
   }
 
-  // Otherwise: when a platform AI Gateway is configured, route through it (platform-funded free
-  // tier). The config's apiToken/apiUrl/extraHeaders are ignored in that mode.
+  // Otherwise: when a platform AI Gateway is configured, route the deployment's own models through
+  // it (platform-funded). A model registered with its own token or URL keeps using those, so users
+  // can still bring their own providers alongside the built-in catalog.
   let gwConfig = getAiGatewayConfig(env);
-  if (gwConfig) {
+  if (gwConfig && !hasOwnCredentials(config)) {
     return getModelViaGateway(gwConfig, config, initiator, options);
   }
 

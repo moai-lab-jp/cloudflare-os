@@ -156,6 +156,18 @@ export class AiGatewayConfig {
 }
 
 /**
+ * Whether a model config carries credentials of its own: an API token, or an API URL (an Ollama or
+ * other compatible server that needs no key). Such a model is one a user registered with their own
+ * provider account, so it keeps using that account even when the deployment runs an AI Gateway,
+ * whatever the admin's `userModelsEnabled` and the gateway's providers say. Only credential-less
+ * configs -- the catalog, admin-added gateway models, the quick model, and user models the admin
+ * lets ride the gateway -- go through the platform gateway and draw on its budget.
+ */
+export function hasOwnCredentials(config: AiModelConfig): boolean {
+  return Boolean(config.apiToken?.trim() || config.apiUrl?.trim());
+}
+
+/**
  * Parse AI Gateway configuration from environment variables. Returns null if AI Gateway
  * mode is not enabled (i.e. CF_AI_GATEWAY is not set).
  */
