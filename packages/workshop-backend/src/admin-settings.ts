@@ -169,7 +169,27 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
     // Promotion is checked on every run, not just after an install, so a deployment that installed
     // before curation existed still ends up offering its bundled formats.
     await this.#promoteBundledFormats();
+    await this.#withdrawUnbundledFeatured();
     return complete;
+  }
+
+  // Take a blueprint that left the bundle off the featured list (Explore). Installing put it there
+  // directly, and it has no owning user, so setBlueprintFeatured() refuses it and an admin has no
+  // way to unfeature it. promotedFormatBlueprints names every id this installer has offered, so
+  // only those are withdrawn: a user's blueprint an admin featured is never one of them. Its
+  // record, content and any format entry stay (an admin removes the format in the panel), and
+  // gadgets made from it keep working. Checked on every run, like promotion, and cheap: it reads
+  // only this DO's storage.
+  async #withdrawUnbundledFeatured(): Promise<void> {
+    let bundled = new Set(BUNDLED_BLUEPRINTS.map(entry => entry.blueprintId));
+    let stale = this.storage.promotedFormatBlueprints.get()
+        .filter(id => !bundled.has(id) && this.storage.featuredBlueprints.get(id));
+    if (stale.length === 0) return;
+    for (let id of stale) this.storage.featuredBlueprints.delete(id);
+    await this.#writeFeaturedSnapshot();
+    logger.info("withdrew unbundled blueprints from the featured list", {
+      event: "formats.featured.withdrawn", size: stale.length,
+    });
   }
 
   // Offer each bundled blueprint as a standard format, once ever. A separate one-shot decision per

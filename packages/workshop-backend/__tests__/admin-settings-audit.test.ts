@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import {
   MAX_ADMIN_AUDIT_ARG_LENGTH, MAX_ADMIN_AUDIT_VALUE_LENGTH, SUGGESTED_MODELS,
-  type AdminAuditRecord, type AdminSettingRecord, type GatewayModel,
+  type AdminAuditRecord, type AdminSettingRecord, type BlueprintPublicInfo, type GatewayModel,
 } from "@gadgets/workshop-shared/api";
 import type { AdminSettingActor } from "../src/admin-access.js";
 import type { AdminAuditDurableObject } from "../src/admin-audit.js";
@@ -14,6 +14,7 @@ import {
   DEFAULT_ADMIN_CONFIG, type AdminConfig, type AdminSettingsStorage,
 } from "../src/storage-schema/admin-settings-storage.js";
 import type { UserDirectoryDurableObject } from "../src/user-directory.js";
+import { FEATURED_BLUEPRINTS_KEY, parseFeaturedBlueprints } from "../src/storage-schema/blueprints-kv.js";
 
 declare module "cloudflare:workers" {
   interface ProvidedEnv {
@@ -426,6 +427,42 @@ describe("AdminSettings promotes bundled formats", () => {
       before: '{"blueprintId":"bp-a","enabled":true}',
       after: '{"blueprintId":"bp-a","enabled":false}',
     }]]);
+  });
+});
+
+/** A featured entry; the mirror stores whatever public info it is given. */
+function featuredInfo(id: string): BlueprintPublicInfo {
+  return { id, metadata: { title: id } } as unknown as BlueprintPublicInfo;
+}
+
+describe("AdminSettings withdraws blueprints that left the bundle from Explore", () => {
+  it.skipIf(BUNDLED_BLUEPRINTS.length === 0)(
+      "unfeatures a blueprint it installed once the bundle drops it, and nothing else", async () => {
+    const { inDo, storageOf, kv, put } = adminSettings();
+    const bundled = BUNDLED_BLUEPRINTS.map(entry => entry.blueprintId);
+    await inDo(admin => {
+      let storage = storageOf(admin);
+      storage.installedFormatBlueprints.put(bundledBlueprintsManifestVersion());
+      // Installed and promoted by an earlier deployment whose bundle still had "old.legacy".
+      storage.promotedFormatBlueprints.put([...bundled, "old.legacy"]);
+      for (let id of [bundled[0]!, "old.legacy", "user-featured"]) {
+        storage.featuredBlueprints.put(featuredInfo(id));
+      }
+    });
+
+    expect(await inDo(admin => admin.ensureBundledBlueprintsInstalled())).toBe(true);
+
+    const ids = await inDo(admin =>
+        [...storageOf(admin).featuredBlueprints.list()].map(entry => entry.id).toSorted());
+    // A user's blueprint an admin featured is not the installer's to withdraw.
+    expect(ids).toStrictEqual([bundled[0]!, "user-featured"].toSorted());
+    expect(parseFeaturedBlueprints(kv.blueprints.get(FEATURED_BLUEPRINTS_KEY)!)
+        .map(entry => entry.id).toSorted()).toStrictEqual(ids);
+
+    // Nothing left to withdraw: a later run leaves the snapshot alone.
+    put.mockClear();
+    expect(await inDo(admin => admin.ensureBundledBlueprintsInstalled())).toBe(true);
+    expect(put.mock.calls.filter(([key]) => key === FEATURED_BLUEPRINTS_KEY)).toStrictEqual([]);
   });
 });
 
