@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RpcStub } from 'capnweb'
-import type { AuthenticatedApi, RedactedAiModelConfig } from '@gadgets/workshop-shared/api'
+import type { AiGatewayInfo, AuthenticatedApi, RedactedAiModelConfig } from '@gadgets/workshop-shared/api'
 
 vi.mock('@cloudflare/kumo', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@cloudflare/kumo')>()),
@@ -81,7 +81,7 @@ describe('AddModelModal', () => {
     document.body.innerHTML = ''
   })
 
-  const render = async (mode: ModelModalMode, chatModelsOnly = false) => {
+  const render = async (mode: ModelModalMode, chatModelsOnly = false, aiConfig: AiGatewayInfo = { enabled: false }) => {
     const updateModel = vi.fn<AuthenticatedApi['updateModel']>(async () => {})
     const addModel = vi.fn<AuthenticatedApi['addModel']>(async () => {})
     const api = { updateModel, addModel } as unknown as RpcStub<AuthenticatedApi>
@@ -95,7 +95,7 @@ describe('AddModelModal', () => {
       onCancel={() => {}}
       onSuccess={() => {}}
       authenticatedApi={api}
-      aiConfig={{ enabled: false }}
+      aiConfig={aiConfig}
     />))
     return { updateModel, addModel }
   }
@@ -111,6 +111,26 @@ describe('AddModelModal', () => {
     // Auto Router runs only through a gateway, so it is never offered here.
     expect(options).not.toContain('Auto')
     expect(options).not.toContain('Other AI Gateway Auto Router...')
+  })
+
+  // A deployment's model the admin disabled or hid (a retired one, say) is not suggested for adding
+  // with one's own key either; its provider's other models and the Other... entry still are.
+  it('leaves out the models the deployment does not offer', async () => {
+    await render({ type: 'add' }, false, {
+      enabled: true,
+      enabledProviders: ['cloudflare'],
+      builtInModelIds: ['@cf/moonshotai/kimi-k2.7-code', '@cf/zai-org/glm-5.2', '@cf/zai-org/glm-5.3'],
+      notOfferedModelIds: ['@cf/moonshotai/kimi-k2.7-code', '@cf/zai-org/glm-5.2'],
+      userModelsEnabled: true,
+    })
+    await click(document.body.querySelector<HTMLElement>('[role="combobox"]')!)
+
+    const options = Array.from(document.body.querySelectorAll('[role="option"]'), option => option.textContent)
+    expect(options).not.toContain('Kimi K2.7 Code (Workers AI)')
+    expect(options).not.toContain('GLM 5.2 (Workers AI)')
+    expect(options).toContain('GLM 5.3 (Workers AI)')
+    expect(options).toContain('Other Cloudflare Workers AI...')
+    expect(options).toContain('Claude Opus 5.5')
   })
 
   it.each([false, true])('adds a decision model typed as a custom model only without chatModelsOnly (chatModelsOnly: %s)', async (chatModelsOnly) => {

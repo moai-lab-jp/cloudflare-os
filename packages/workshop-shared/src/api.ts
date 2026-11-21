@@ -2299,6 +2299,13 @@ export type AiGatewayInfo = {
    */
   builtInModelIds: string[];
   /**
+   * The IDs among `builtInModelIds` that the admin took out of the pickers, as 'hidden' or
+   * 'disabled' (see GatewayModelMode). The add-model dialog does not suggest these either, so a
+   * model its provider retired, which the admin disabled, is not offered for adding with one's own
+   * key. Absent from a backend that predates it.
+   */
+  notOfferedModelIds?: string[];
+  /**
    * Whether users may add models of their own (see AdminApi.setUserModelsEnabled). When false,
    * addModel() and updateModel() refuse, and the models the user added are neither listed nor
    * resolved.

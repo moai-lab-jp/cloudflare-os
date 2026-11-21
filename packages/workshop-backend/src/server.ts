@@ -303,6 +303,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
         enabled: true,
         enabledProviders: models.addableProviders,
         builtInModelIds: models.all.map(model => model.id),
+        notOfferedModelIds: models.all.filter(model => model.mode !== "enabled").map(model => model.id),
         userModelsEnabled: models.userModels,
       };
     } else {

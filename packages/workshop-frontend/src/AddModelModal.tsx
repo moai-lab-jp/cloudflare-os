@@ -81,7 +81,10 @@ function decodeSelection(value: string): SelectionType {
 }
 
 // Build the flat list of options for the Select dropdown.
-function buildOptions(gatewayMode: boolean, enabledProviders: Set<string> | null, chatModelsOnly: boolean) {
+// `notOffered` holds the deployment's models its admin took out of the pickers (see
+// AiGatewayInfo.notOfferedModelIds): a provider may have retired them, so they are not suggested.
+function buildOptions(gatewayMode: boolean, enabledProviders: Set<string> | null, chatModelsOnly: boolean,
+                      notOffered: ReadonlySet<string>) {
   const options: { value: string; label: string; provider: string }[] = []
   const providerOrder = Object.keys(SUGGESTED_MODELS) as AiModelProvider[]
 
@@ -93,7 +96,7 @@ function buildOptions(gatewayMode: boolean, enabledProviders: Set<string> | null
     // In gateway mode, suggested models are already built-in, so don't list them.
     if (!gatewayMode) {
       for (const [modelId, model] of Object.entries(SUGGESTED_MODELS[provider])) {
-        if (model.hidden || (chatModelsOnly && model.kind === 'decision')) continue
+        if (model.hidden || notOffered.has(modelId) || (chatModelsOnly && model.kind === 'decision')) continue
         options.push({
           value: encodeSelection(provider, modelId),
           label: model.name,
@@ -305,7 +308,8 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
     }
   }
 
-  const options = buildOptions(gatewayMode, enabledProviders, chatModelsOnly)
+  const notOffered = new Set(aiConfig?.enabled === true ? aiConfig.notOfferedModelIds ?? [] : [])
+  const options = buildOptions(gatewayMode, enabledProviders, chatModelsOnly, notOffered)
   const showCustomFields = selection?.type === 'custom'
   const example = selection ? exampleModel(selection.provider) : null
   const isOllama = selection?.provider === 'ollama'
